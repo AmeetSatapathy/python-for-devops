@@ -1,0 +1,185 @@
+Great! Here's a **Terraform configuration** to automate deletion of stale EBS snapshots using **Lambda + CloudWatch (EventBridge)**. This setup includes:
+
+1. **IAM role and policy** for Lambda
+2. **Lambda function** with environment variable for snapshot retention
+3. **CloudWatch Event rule** to run Lambda on a schedule (daily)
+4. (Optional) **S3 bucket** to upload Lambda code
+
+---
+
+## ✅ Terraform Setup
+
+### **1. File Structure**
+
+```
+.
+├── main.tf
+├── variables.tf
+├── lambda
+│   └── delete_snapshots.py
+```
+
+---
+
+### **2. `lambda/delete_snapshots.py`**
+
+```python
+import boto3
+from datetime import datetime, timezone, timedelta
+import os
+
+def lambda_handler(event, context):
+    ec2 = boto3.client('ec2')
+    
+    retention_days = int(os.environ.get('RETENTION_DAYS', 30))
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=retention_days)
+
+    snapshots = ec2.describe_snapshots(OwnerIds=['self'])['Snapshots']
+    
+    deleted = 0
+    for snapshot in snapshots:
+        if snapshot['StartTime'] < cutoff:
+            print(f"Deleting snapshot {snapshot['SnapshotId']}")
+            ec2.delete_snapshot(SnapshotId=snapshot['SnapshotId'])
+            deleted += 1
+
+    return {
+        'statusCode': 200,
+        'body': f"Deleted {deleted} snapshots older than {retention_days} days"
+    }
+```
+
+---
+
+### **3. `main.tf`**
+
+```hcl
+provider "aws" {
+  region = var.aws_region
+}
+
+resource "aws_iam_role" "lambda_role" {
+  name = "lambda_snapshot_cleanup_role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Action = "sts:AssumeRole",
+      Effect = "Allow",
+      Principal = {
+        Service = "lambda.amazonaws.com"
+      }
+    }]
+  })
+}
+
+resource "aws_iam_policy" "lambda_policy" {
+  name = "lambda_snapshot_cleanup_policy"
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Action = [
+          "ec2:DescribeSnapshots",
+          "ec2:DeleteSnapshot"
+        ],
+        Effect   = "Allow",
+        Resource = "*"
+      },
+      {
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ],
+        Effect   = "Allow",
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_policy_attachment" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = aws_iam_policy.lambda_policy.arn
+}
+
+data "archive_file" "lambda_zip" {
+  type        = "zip"
+  source_file = "${path.module}/lambda/delete_snapshots.py"
+  output_path = "${path.module}/lambda/delete_snapshots.zip"
+}
+
+resource "aws_lambda_function" "delete_snapshots" {
+  function_name = "DeleteStaleSnapshots"
+  handler       = "delete_snapshots.lambda_handler"
+  runtime       = "python3.9"
+  filename      = data.archive_file.lambda_zip.output_path
+  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+
+  role = aws_iam_role.lambda_role.arn
+
+  environment {
+    variables = {
+      RETENTION_DAYS = var.retention_days
+    }
+  }
+}
+
+resource "aws_cloudwatch_event_rule" "daily" {
+  name                = "DeleteStaleSnapshotsDaily"
+  schedule_expression = "rate(1 day)"
+}
+
+resource "aws_cloudwatch_event_target" "lambda_target" {
+  rule      = aws_cloudwatch_event_rule.daily.name
+  target_id = "SnapshotCleanupLambda"
+  arn       = aws_lambda_function.delete_snapshots.arn
+}
+
+resource "aws_lambda_permission" "allow_cloudwatch" {
+  statement_id  = "AllowExecutionFromCloudWatch"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.delete_snapshots.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.daily.arn
+}
+```
+
+---
+
+### **4. `variables.tf`**
+
+```hcl
+variable "aws_region" {
+  default = "us-east-1"
+}
+
+variable "retention_days" {
+  default = "30"
+}
+```
+
+---
+
+### ✅ Deploy Instructions
+
+```bash
+terraform init
+terraform plan
+terraform apply
+```
+
+---
+
+### 🔁 Optional Enhancements
+
+* Use **S3** for code packaging instead of inline ZIP (if function becomes large).
+* Filter by **tags** to avoid deleting critical snapshots.
+* Add **SNS notifications** post-deletion.
+
+---
+
+Would you like me to include tag filtering or dry-run support in the Lambda function?
