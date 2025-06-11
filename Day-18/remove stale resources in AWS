@@ -1,0 +1,101 @@
+To automate the deletion of **stale AWS EBS snapshots** using **CloudWatch** and a **Lambda function**, here's a complete solution. This setup will:
+
+1. Use **CloudWatch Events (EventBridge)** to trigger a Lambda function on a schedule.
+2. The **Lambda function** will:
+
+   * List all EBS snapshots owned by your account.
+   * Filter out snapshots older than a defined retention period (e.g., 30 days).
+   * Delete those stale snapshots.
+
+---
+
+### ✅ Step-by-Step Setup
+
+#### **1. Create the Lambda Function**
+
+**Lambda Code (Python 3.9+):**
+
+```python
+import boto3
+from datetime import datetime, timezone, timedelta
+import os
+
+def lambda_handler(event, context):
+    ec2 = boto3.client('ec2')
+    
+    # Set the retention period (e.g., 30 days)
+    retention_days = int(os.environ.get('RETENTION_DAYS', 30))
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=retention_days)
+
+    # Get all snapshots owned by this account
+    snapshots = ec2.describe_snapshots(OwnerIds=['self'])['Snapshots']
+
+    deleted = 0
+    for snapshot in snapshots:
+        start_time = snapshot['StartTime']
+        snapshot_id = snapshot['SnapshotId']
+        
+        if start_time < cutoff:
+            print(f"Deleting snapshot {snapshot_id} from {start_time}")
+            ec2.delete_snapshot(SnapshotId=snapshot_id)
+            deleted += 1
+
+    return {
+        'statusCode': 200,
+        'body': f"Deleted {deleted} stale snapshots older than {retention_days} days"
+    }
+```
+
+**Lambda Environment Variable:**
+
+* `RETENTION_DAYS`: `30` (or any value you prefer)
+
+---
+
+#### **2. Create an IAM Role for Lambda**
+
+Attach the following policy to the Lambda execution role:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeSnapshots",
+        "ec2:DeleteSnapshot"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "logs:*",
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+---
+
+#### **3. Create a CloudWatch (EventBridge) Rule**
+
+* Go to **Amazon EventBridge > Rules > Create rule**
+* **Name**: `DeleteStaleSnapshots`
+* **Event Source**: `EventBridge (CloudWatch Events)`
+* **Schedule pattern**: `rate(1 day)` or `cron(...)` as needed
+* **Target**: Lambda function (choose the one you created above)
+
+---
+
+#### ✅ Optional Enhancements
+
+* **Tag filtering**: Only delete snapshots with specific tags (e.g., `Backup=true`)
+* **Logging**: Add CloudWatch logging or SNS notification after cleanup
+* **Dry run mode**: For testing before live deletions
+
+---
+
+Would you like help deploying this with Terraform or CloudFormation as infrastructure-as-code?
