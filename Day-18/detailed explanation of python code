@@ -1,0 +1,172 @@
+Great! Let's go through the **Lambda function Python code** line by line so you understand exactly what it's doing.
+
+---
+
+### ✅ **Full Line-by-Line Explanation**
+
+```python
+import boto3
+```
+
+* Imports the **Boto3 SDK**, which is the official AWS SDK for Python.
+* This allows your Lambda function to interact with AWS services (like EC2, S3, etc.).
+
+---
+
+```python
+from datetime import datetime, timezone, timedelta
+```
+
+* Imports classes from Python’s built-in `datetime` module:
+
+  * `datetime`: represents date and time.
+  * `timezone`: used to define the UTC timezone.
+  * `timedelta`: used for time calculations (e.g., subtracting 30 days).
+
+---
+
+```python
+import os
+```
+
+* Imports the `os` module to read environment variables (like `RETENTION_DAYS`).
+
+---
+
+```python
+def lambda_handler(event, context):
+```
+
+* This is the **entry point** for the Lambda function.
+* AWS calls this function automatically when the Lambda is triggered.
+* `event`: contains event data (not used here).
+* `context`: contains metadata about the invocation, function, and execution environment.
+
+---
+
+```python
+    ec2 = boto3.client('ec2')
+```
+
+* Creates a Boto3 **client** to interact with **Amazon EC2**.
+* You'll use this client to list and delete EBS snapshots.
+
+---
+
+```python
+    retention_days = int(os.environ.get('RETENTION_DAYS', 30))
+```
+
+* Reads the `RETENTION_DAYS` environment variable from Lambda config.
+* If it's not set, defaults to **30 days**.
+
+---
+
+```python
+    now = datetime.now(timezone.utc)
+```
+
+* Gets the **current date and time** in UTC.
+* Needed to compare snapshot creation times.
+
+---
+
+```python
+    cutoff = now - timedelta(days=retention_days)
+```
+
+* Calculates the **cutoff datetime**: any snapshot older than this is considered **stale**.
+* Example: if `retention_days` is 30, this gives you the timestamp for "30 days ago."
+
+---
+
+```python
+    snapshots = ec2.describe_snapshots(OwnerIds=['self'])['Snapshots']
+```
+
+* Calls `describe_snapshots()` to fetch all EBS snapshots **owned by your account** (`'self'`).
+* Returns a dictionary; we extract the list under the key `'Snapshots'`.
+
+---
+
+```python
+    deleted = 0
+```
+
+* Initializes a counter to keep track of how many snapshots are deleted.
+
+---
+
+```python
+    for snapshot in snapshots:
+```
+
+* Loops through all the snapshots returned by the API.
+
+---
+
+```python
+        start_time = snapshot['StartTime']
+        snapshot_id = snapshot['SnapshotId']
+```
+
+* Extracts:
+
+  * `start_time`: when the snapshot was created (datetime object).
+  * `snapshot_id`: the unique ID used to identify the snapshot.
+
+---
+
+```python
+        if start_time < cutoff:
+```
+
+* Checks if the snapshot is **older** than the retention period.
+* If yes, it's stale and should be deleted.
+
+---
+
+```python
+            print(f"Deleting snapshot {snapshot_id} from {start_time}")
+```
+
+* Logs the ID and creation time of the snapshot being deleted (visible in CloudWatch Logs).
+
+---
+
+```python
+            ec2.delete_snapshot(SnapshotId=snapshot_id)
+```
+
+* Deletes the snapshot using its ID.
+
+---
+
+```python
+            deleted += 1
+```
+
+* Increments the counter of deleted snapshots.
+
+---
+
+```python
+    return {
+        'statusCode': 200,
+        'body': f"Deleted {deleted} stale snapshots older than {retention_days} days"
+    }
+```
+
+* Returns a **JSON response** with HTTP status 200 and a message indicating how many snapshots were deleted.
+
+---
+
+### ✅ Summary
+
+* This Lambda function is safe, clean, and efficient for automating snapshot cleanup.
+* You can tune it using the `RETENTION_DAYS` environment variable.
+* Make sure it has the correct IAM role permissions to avoid failure at runtime.
+
+---
+
+Would you like help creating the CloudWatch rule, deploying this with Terraform, or testing it safely in a dev environment first?
